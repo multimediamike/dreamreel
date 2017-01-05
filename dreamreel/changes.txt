@@ -1,0 +1,13 @@
+* errno.h needs ENOMEM
+
+* common.h:
+/* avoid usage of various functions */
+//#define malloc please_use_av_malloc
+//#define free please_use_av_free
+//#define realloc please_use_av_realloc
+
+* ffmpeg, in general
+- palette pass-through interface
+- along with palette data structures, a flag to indicate that the
+palette has changed
+- colorspace query and set functions

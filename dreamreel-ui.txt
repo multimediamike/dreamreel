@@ -1,0 +1,25 @@
+5/28/03
+* Dreamreel GUI
+- main thread only accepts key events and then passes them through to the
+GUI manager module
+- GUI manager module is not a thread; it has a function that is called by
+the video output module that paints any UI elements over the current frame
+before the frame is sent to the renderer
+- GUI module needs to have a mutex to prevent the module from updating GUI
+elements at the same time they are being sent to the TA
+- GUI module has these public functions:
+  update_elements(): called by the main task to update the status of
+    the controller buttons; returns when all necessary UI element states
+    have been updated; locks mutex on the way in, unlocks on the way out
+  draw_elements(): called by the video output to paint necessary UI
+    elements; assumes that the TA is already set up to receive the correct
+    plane of data; locks mutex on the way in, unlocks on the way out
+- problem: update_elements() can cause reads of the filesystem which could
+take a little while but will block the video in the meantime; instead, 
+when it is time to read, ask the main module to read data and callback 
+when it is finished
+- the above may not be a problem if a ISO9660 fs is always cached
+- alternatively, take the initiative to read the disc when it is inserted
+
+* font:
+http://www.antimeta.com/projects/font/

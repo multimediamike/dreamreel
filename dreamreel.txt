@@ -1,0 +1,160 @@
+Dreamreel Organization
+
+* main/UI thread
+- first thread that starts up, and it runs the show by taking input from
+the user, starting/pausing/stopping/seeking through playback, managing the
+UI, loading/saving playlists, also managing UI animations
+
+
+* demux thread
+- new thread created for each file playback
+- this layer leverages from xine's demuxers and almost all should be able
+to be dropped in, unmodified (except for the catalog entry at the end)
+- thread created with a pointer to the demux object and an input object
+- demux thread calls send_headers() (file has already been opened by main
+thread), also video_fifo and audio_fifo
+- sits idle until engine calls the _seek() function
+- dispatches A/V buffers until status turns to DEMUX_FINISHED
+- after the demuxer is finished, it passes on its slices until either the
+demuxer status has changed to DEMUX_OK or until the engine instructs the
+thread to exit
+- public functions:
+  - demux_thread
+  - demux_thread_exit
+  - doesn't really need to handle seeking since engine can call the demux
+  object's seek() function directly
+  - doesn't need any kind of pause function since if the pause signal goes
+  to the output units and cause the rest of the system to block anyway
+- demux_thread():
+    thread_is_alive = 1
+    send_headers()
+    while (thread_is_alive)
+      if (demux_object->status == DEMUX_OK)
+      	demux_object->send_chunk()
+      yield()
+- demux_thread_exit():
+    thread_is_alive = 0
+
+
+* video decoder thread
+- new thread created for each file playback
+- sits in a loop and waits for buffers from the demuxer
+- public functions:
+  - video_decoder_thread
+  - no need for an exit function since thread exits when it receives an 
+end
+  of stream buffer from the demuxer
+- video_decoder_thread():
+    while (thread_is_alive)
+- video_decoder_thread_exit():
+    decoder_ok = 0
+    do
+		wait for buffer from demuxer
+      if (buffer_flags contain BUF_HEADER)
+        find_decoder()
+        if (no decoder found)
+          decoder_ok remains 0, will not decode frames
+        reset_video_pools() (public from video output)
+        init_video_pools() (public from video output)
+        if everything is okay, set decoder_ok = 1
+      else if (buffer_flags contain BUF_SPECIAL)
+        handle special data (probably means put it in extradata)
+      else if (frame is ended)
+        lock_twiddle_texture() (public from video_out, locks 1 of 2 
+          twiddle_textures)
+        avcodec_decode_video() (ffmpeg function)
+        if (decoder does not support DR1)
+          draw_slice() for entire buffer (public from video_out)
+        send_texture() (public from video_out, queues buffer for display) 
+    while (!END_OF_STREAM flag)
+    clean up selected decoder
+
+
+* audio decoder thread
+- new thread created for each file playback
+
+
+* video output thread
+- created once at startup
+- manages drawing both video frame textures and UI textures
+- controls the playback clock based on the refresh frequency
+- receives an async. callback on every refresh
+- when it is time to begin playback send_new_pts with 0; demuxer may
+override this immediately afterwards with a new seek command
+- manages 3 pools of buffers
+  - one for avcodec get_buffer() requests
+  - one for intermediate twiddled textures (2 buffers)
+  - one for the transferred VRAM textures
+- public functions:
+  - reset_video_pools()
+    - frees all buffers in all 3 pools
+  - init_video_pools(width, height, pixelformat)
+    - calls reset_video_pools(), for good measure
+    - figures out video frame dimensions
+    - allocates n (n=3?) avcodec to start with (avcodec_textures)
+    - allocates both twiddle textures (twiddle_textures)
+    - allocates VRAM buffers until it runs out of VRAM (vram_textures)
+  - lock_twiddle_texture()
+    - lock 1 of the 2 twiddle textures
+  - draw_slice()
+    - twiddle a slice of a buffer into the locked twiddle texture
+  - send_texture()
+    - allocate a vram_texture
+    - arrange for DMA transfer of the locked twiddle_texture to the
+    vram_texture
+    - block for now, but later, make a note of the DMA'd texture number
+    and release twiddle_texture when done
+  - video output has 3 states:
+    - stopped
+    - play
+    - paused
+  - video_out is initialized to stopped state
+  - when frames start arriving (vo is still in stopped state), set
+  metronom for first pts - n msec (n = 10?), transition to play state
+  - this sets up a timer and gives 10ms for frames to buffer
+  - when callback comes in, if in buffering state, start sending frames
+  - when a pause signal comes through, transition to pause state and
+  stop metronom; this will cause a backup in the system (but frames will
+  still get buffered until there is no space left)
+  - when the unpause signal comes through, transition back to play state
+  and start sending frames immediately again
+  - seeking is the same as a stop then start sequence which allows for
+  buffering
+  - each frame has a last_frame flag which will be set if the last frame
+  comes through; when it is time to send this frame out, transition to
+  stopped state
+
+
+* audio output thread
+- created once at startup
+- creates 2 decode buffers available for use by the audio decoder, each is
+the max size specified in avcodec.h
+- the 2 buffers are to provide support for DMA later (DMA from one while
+decoding into the other)
+
+
+* debugging ideas
+- change all printf() statements to debug_printf() and define debug_printf()
+in dreamreel.h to only print if another #define is set; may want to refine
+this on a per-module basis later
+- the preceding strategy will help in making sure the program isn't having
+problems due to excessive printing
+- solving the video_out problem: validate that different frames are getting
+sent: not only should the test pattern change, but the palette should also
+change
+
+
+* audio output prototyping
+- try playing an audio file with the built-in API functions:
+  #include "sound/sound.h"
+  #include "sound/sfxmgr.h"
+  snd_init()
+  snd_sfx_load()
+  snd_sfx_play()
+- try creating a contrived waveform in memory, allocating sound RAM, and 
+loading it
+- in the end, ideal solution would put a program on the ARM that is 
+responsible for de-interleaving stereo data and monitoring playback status
+
+
+* prototype screenshot download
